@@ -17,10 +17,8 @@ WORKDIR /app
 
 COPY /build/libs/ms.order.jar app.jar
 
-EXPOSE 8080
-
 ENV SPRING_PROFILES_ACTIVE=docker
-ENV DB_HOST=postgres
-ENV RABBIT_HOST=rabbitmq
+
+EXPOSE 8080
 
 ENTRYPOINT ["java", "-jar", "app.jar"]
