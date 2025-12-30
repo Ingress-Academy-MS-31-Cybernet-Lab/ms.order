@@ -22,6 +22,27 @@ dependencies {
     //spring
     implementation "org.springframework.boot:spring-boot-starter-web"
 
+    // 1. WEB & ACTUATOR
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // 2. DATABASE (POSTGRESQL & JPA & LIQUIBASE)
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.liquibase:liquibase-core'
+    runtimeOnly 'org.postgresql:postgresql'
+
+    // 3. REDIS (CACHING)
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
+    // 4. MESSAGING (RABBITMQ)
+    implementation 'org.springframework.boot:spring-boot-starter-amqp'
+
+    // 5. MICROSERVICE COMMUNICATION (OPENFEIGN & RESILIENCE4J)
+//    implementation "org.springframework.cloud:spring-cloud-dependencies:2025.1.0"
+//
+//    // 7. Migration
+//    implementation 'org.springframework.boot:spring-boot-starter-liquibase'
+
     //lombok
     compileOnly "org.projectlombok:lombok"
     annotationProcessor "org.projectlombok:lombok"
@@ -29,12 +50,28 @@ dependencies {
     //swagger
     implementation "org.springdoc:springdoc-openapi-ui:$openApiVersion"
 
+//    implementation 'org.springframework.cloud:spring-cloud-starter-config'
+
     //testing
     testImplementation "org.apache.groovy:groovy:$groovyVersion"
     testImplementation "io.github.benas:random-beans:$randomBeansVersion"
     testImplementation "org.spockframework:spock-spring:$spockSpringVersion"
     testImplementation "org.springframework.boot:spring-boot-starter-test"
+//    testImplementation 'org.springframework.boot:spring-boot-starter-liquibase-test'
+
+//    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+//    testImplementation 'org.testcontainers:junit-jupiter'
+//    testImplementation 'org.testcontainers:postgresql'
+//    testImplementation 'org.testcontainers:rabbitmq'
+
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
+
+//dependencyManagement {
+//    imports {
+//        mavenBom "org.springframework.cloud:spring-cloud-dependencies:${springCloudVersion}"
+//    }
+//}
 
 test {
     useJUnitPlatform()

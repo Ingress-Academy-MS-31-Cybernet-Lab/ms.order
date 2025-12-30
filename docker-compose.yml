@@ -1,0 +1,114 @@
+version: '3.8'
+
+name: ms-order
+
+services:
+  # 1. PostgreSQL (Order Database)
+  postgres:
+    #    image: postgres:16-alpine
+    platform: linux/arm64
+    build:
+      context: ./postgres-init
+      dockerfile: Dockerfile
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      TZ: Asia/Baku
+
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+      ORDER_DB_NAME: ${ORDER_DB_NAME}
+      ORDER_DB_USER: ${ORDER_DB_USER}
+      ORDER_DB_PASS: ${ORDER_DB_PASS}
+    networks:
+      - ms-order-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ORDER_DB_USER} -d ${ORDER_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - order_data:/var/lib/postgresql/data
+
+  # 2. RabbitMQ (Message Broker)
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: order_rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: order_user
+      RABBITMQ_DEFAULT_PASS: order_password
+    networks:
+      - ms-order-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq/
+      - rabbitmq_log:/var/log/rabbitmq/
+
+  # 3. Redis (Cache)
+  redis:
+    image: redis:7-alpine
+    container_name: order_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - ms-order-network
+    volumes:
+      - redis_data:/data
+
+  # 4. Zipkin (Tracing)
+#  zipkin:
+#    image: openzipkin/zipkin
+#    container_name: order_zipkin
+#    ports:
+#      - "9411:9411"
+#    networks:
+#      - ms-order-network
+
+  
+  # 5. Order Service (Java App)
+  order-service:
+    build: .
+    container_name: order_service_app
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      # Database Connection
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/order_db
+      - SPRING_DATASOURCE_USERNAME=order_user
+      - SPRING_DATASOURCE_PASSWORD=order_pass
+      # RabbitMQ Connection
+      - SPRING_RABBITMQ_HOST=rabbitmq
+      - SPRING_RABBITMQ_USERNAME=order_user
+      - SPRING_RABBITMQ_PASSWORD=order_password
+      # Redis Connection
+      - SPRING_DATA_REDIS_HOST=redis
+      # Zipkin Connection
+#      - MANAGEMENT_ZIPKIN_TRACING_ENDPOINT=http://zipkin:9411/api/v2/spans
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ms-order-network
+
+networks:
+  ms-order-network:
+    driver: bridge
+
+volumes:
+  order_data:
+  redis_data:
+  rabbitmq_data:
+  rabbitmq_log:
