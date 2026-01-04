@@ -29,7 +29,9 @@ dependencies {
     // 2. DATABASE (POSTGRESQL & JPA & LIQUIBASE)
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.liquibase:liquibase-core'
+    implementation 'io.hypersistence:hypersistence-utils-hibernate-55:3.7.0'
     runtimeOnly 'org.postgresql:postgresql'
+
 
     // 3. REDIS (CACHING)
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
