@@ -37,36 +37,36 @@ public class OrderItem {
     @JoinColumn(name = "order_id", nullable = false)
     private Order order;
 
-    @Column(name = "product_id", nullable = false)
+    @Column(nullable = false)
     private String productId;
 
-    @Column(name = "supplier_id", nullable = false)
+    @Column(nullable = false)
     private Long supplierId;
 
     @Column(nullable = false)
     private Integer quantity;
 
-    @Column(name = "unit_price", nullable = false)
+    @Column(nullable = false)
     private BigDecimal unitPrice;
 
-    @Column(name = "discount_share")
+    @Column
     private BigDecimal discountShare;
 
-    @Column(name = "final_price", nullable = false)
+    @Column(nullable = false)
     private BigDecimal finalPrice;
 
-    @Column(name = "commission_rate")
+    @Column
     private BigDecimal commissionRate;
 
-    @Column(name = "commission_amount")
+    @Column
     private BigDecimal commissionAmount;
 
-    @Column(name = "payout_amount", nullable = false)
+    @Column(nullable = false)
     private BigDecimal payoutAmount;
 
-    @Column(name = "shipping_fee")
+    @Column
     private BigDecimal shippingFee;
 
-    @Column(name = "shipping_type")
+    @Column
     private String shippingType;
 }

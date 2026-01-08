@@ -18,6 +18,8 @@ import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.EnumType;
 import javax.persistence.Enumerated;
+import javax.persistence.GeneratedValue;
+import javax.persistence.GenerationType;
 import javax.persistence.Id;
 import javax.persistence.OneToMany;
 import javax.persistence.Table;
@@ -40,34 +42,36 @@ import java.util.Map;
 public class Order {
 
     @Id
+    @GeneratedValue(strategy = GenerationType.AUTO)
+    @Column(name = "id", nullable = false, updatable = false)
     private String id; // UUID String
 
-    @javax.persistence.Column(name = "user_id", nullable = false)
+    @Column(nullable = false)
     private Long userId;
 
-    @Column(name = "gross_amount", nullable = false)
+    @Column(nullable = false)
     private BigDecimal grossAmount;
 
-    @Column(name = "shipping_amount")
+    @Column
     private BigDecimal shippingAmount;
 
-    @Column(name = "total_discount")
+    @Column
     private BigDecimal totalDiscount;
 
-    @Column(name = "net_amount", nullable = false)
+    @Column(nullable = false)
     private BigDecimal netAmount;
 
-    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
+    @Enumerated(EnumType.STRING)
     private OrderStatus status;
 
-    @Column(name = "fail_reason", columnDefinition = "TEXT")
+    @Column(columnDefinition = "TEXT")
     private String failReason;
 
-    @Column(name = "payment_id")
+    @Column
     private String paymentId;
 
-    @Column(name = "shipping_address", columnDefinition = "jsonb")
+    @Column(columnDefinition = "jsonb")
     @Type(type = "io.hypersistence.utils.hibernate.type.json.JsonBinaryType")
     private Map<String, Object> shippingAddress;
 
@@ -75,19 +79,19 @@ public class Order {
     private Integer version;
 
     @CreationTimestamp
-    @Column(name = "created_at", updatable = false)
+    @Column(updatable = false)
     private LocalDateTime createdAt;
 
     @UpdateTimestamp
-    @Column(name = "updated_at")
+    @Column
     private LocalDateTime updatedAt;
 
-    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderItem> items = new ArrayList<>();
 
-    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderDiscount> discounts = new ArrayList<>();
 
     public void addItem(OrderItem item) {

@@ -42,16 +42,16 @@ public class OrderDiscount {
     @JoinColumn(name = "order_item_id")
     private OrderItem orderItem; // Nullable
 
-    @Column(name = "promo_code", nullable = false)
+    @Column(nullable = false)
     private String promoCode;
 
-    @Column(name = "discount_type")
+    @Column
     private String discountType; // PRODUCT, SHIPPING
 
     @Column(nullable = false)
     private BigDecimal amount;
 
-    @Column(name = "funded_by", nullable = false)
+    @Column(nullable = false)
     private String fundedBy; // PLATFORM, SUPPLIER
 
     @Column(columnDefinition = "TEXT")

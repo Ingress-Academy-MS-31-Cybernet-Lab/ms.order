@@ -30,10 +30,10 @@ public class OutboxEvent {
     @Id
     private UUID id;
 
-    @Column(name = "aggregate_type", nullable = false)
+    @Column(nullable = false)
     private String aggregateType; // ORDER
 
-    @Column(name = "aggregate_id", nullable = false)
+    @Column(nullable = false)
     private String aggregateId;
 
     @Column(nullable = false)
@@ -44,7 +44,7 @@ public class OutboxEvent {
     private Map<String, Object> payload;
 
     @CreationTimestamp
-    @Column(name = "created_at", updatable = false)
+    @Column(updatable = false)
     private LocalDateTime createdAt;
 
     @Builder.Default
