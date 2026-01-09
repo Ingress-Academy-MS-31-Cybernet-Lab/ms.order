@@ -49,6 +49,10 @@ dependencies {
     compileOnly "org.projectlombok:lombok"
     annotationProcessor "org.projectlombok:lombok"
 
+    //mapstruct
+    implementation("org.mapstruct:mapstruct:1.6.3")
+    implementation("org.mapstruct:mapstruct-processor:1.6.3")
+
     //swagger
     implementation "org.springdoc:springdoc-openapi-ui:$openApiVersion"
 
