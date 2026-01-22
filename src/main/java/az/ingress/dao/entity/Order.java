@@ -2,6 +2,7 @@ package az.ingress.dao.entity;
 
 
 import az.ingress.enums.OrderStatus;
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
@@ -77,9 +78,9 @@ public class Order {
     @Column
     private String paymentId;
 
+    @Type(type = "jsonb")
     @Column(columnDefinition = "jsonb")
-    @Type(type = "io.hypersistence.utils.hibernate.type.json.JsonBinaryType")
-    private Map<String, Object> shippingAddress;
+    private OrderAddress shippingAddress;
 
     @Version
     private Integer version;
@@ -88,8 +89,8 @@ public class Order {
     @Column(updatable = false)
     private LocalDateTime createdAt;
 
-    @UpdateTimestamp
     @Column
+    @UpdateTimestamp
     private LocalDateTime updatedAt;
 
     @Builder.Default

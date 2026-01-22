@@ -8,4 +8,6 @@ import java.util.List;
 public class CreateOrderRequest {
     private Long userId;
     private List<OrderItemRequest> items;
+    private AddressRequest shippingAddress;
+    private String promoCode;
 }

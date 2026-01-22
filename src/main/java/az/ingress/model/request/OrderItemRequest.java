@@ -6,5 +6,5 @@ import lombok.Data;
 public class OrderItemRequest {
     private String productId;
     private Integer quantity;
-    private Double unitPrice;
+    private String promoCode;
 }

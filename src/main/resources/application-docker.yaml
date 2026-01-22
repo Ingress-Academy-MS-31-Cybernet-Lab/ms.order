@@ -35,6 +35,10 @@ spring:
     username: ${SPRING_RABBITMQ_USERNAME:order_user}
     password: ${SPRING_RABBITMQ_PASSWORD:order_password}
 
+client:
+  product:
+    use-mock: true
+
 #management:
 #  endpoints:
 #    web:

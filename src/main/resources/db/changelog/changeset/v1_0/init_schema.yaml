@@ -102,7 +102,7 @@ databaseChangeLog:
                     nullable: false
               - column:
                   name: order_id
-                  type: VARCHAR(36)
+                  type: UUID
                   constraints:
                     nullable: false
                     foreignKeyName: fk_order_items_order
@@ -187,7 +187,7 @@ databaseChangeLog:
                     nullable: false
               - column:
                   name: order_id
-                  type: VARCHAR(36)
+                  type: UUID
                   constraints:
                     nullable: false
                     foreignKeyName: fk_discounts_order
