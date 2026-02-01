@@ -1,6 +1,7 @@
 plugins {
     id "java"
     id "groovy"
+    id "jacoco"
     id "org.springframework.boot" version "$springBootVersion"
     id "io.spring.dependency-management" version "$dependencyManagementVersion"
 }
@@ -82,4 +83,16 @@ dependencies {
 
 test {
     useJUnitPlatform()
+    jacoco {
+        enabled = true
+    }
+    finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
 }

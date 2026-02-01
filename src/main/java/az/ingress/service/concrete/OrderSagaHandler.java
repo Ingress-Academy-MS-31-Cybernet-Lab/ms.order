@@ -17,16 +17,22 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronizationAdapter;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Map;
 import java.util.UUID;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class OrderSagaHandler implements OrderSagaService {
+
+    private static final String AGGREGATE_TYPE = "ORDER";
+    private static final String EVENT_CANCELLED = "ORDER_CANCELLED";
+    private static final String EVENT_CONFIRMED = "ORDER_CONFIRMED";
 
     private final OrderRepository orderRepository;
     private final OutboxEventRepository outboxEventRepository;
@@ -38,16 +44,8 @@ public class OrderSagaHandler implements OrderSagaService {
     public void compensateOrder(UUID orderId, String reason) {
         log.info("Starting compensation for Order: {}, Reason: {}", orderId, reason);
 
-        var orderOptional = orderRepository.findById(orderId);
-        if (orderOptional.isEmpty()) {
-            log.warn("Order not found for compensation: {}", orderId);
-            return;
-        }
-
-        var order = orderOptional.get();
-
-        if (OrderStatus.CANCELLED.equals(order.getStatus())) {
-            log.info("Order {} is already CANCELLED, skipping compensation.", orderId);
+        var order = findOrderById(orderId);
+        if (order == null || isAlreadyCancelled(order, orderId)) {
             return;
         }
 
@@ -56,138 +54,143 @@ public class OrderSagaHandler implements OrderSagaService {
         orderRepository.save(order);
         log.info("Order {} status updated to CANCELLED.", orderId);
 
-        saveAndPublishOutboxEvent(order);
+        publishCancelledEvent(order);
     }
 
-    @SneakyThrows
-    private void saveAndPublishOutboxEvent(Order order) {
+    @Override
+    @Transactional
+    public void handleSagaSuccess(SagaSuccessEvent event) {
+        var orderId = event.getOrderId();
+        var source = event.getSource();
 
+        log.info("Handling SAGA Success for Order: {}, Source: {}", orderId, source);
+
+        var order = findOrderById(orderId);
+        if (order == null || isTerminalState(order, orderId, source)) {
+            return;
+        }
+
+        updateOrderStatus(order, event);
+        orderRepository.save(order);
+
+        if (OrderStatus.CONFIRMED.equals(order.getStatus())) {
+            log.info("Order {} status updated to CONFIRMED. Publishing OrderConfirmedEvent.", order.getId());
+            publishConfirmedEvent(order);
+        }
+    }
+
+    private Order findOrderById(UUID orderId) {
+        var orderOptional = orderRepository.findById(orderId);
+        if (orderOptional.isEmpty()) {
+            log.warn("Order not found: {}", orderId);
+            return null;
+        }
+        return orderOptional.get();
+    }
+
+    private boolean isAlreadyCancelled(Order order, UUID orderId) {
+        if (OrderStatus.CANCELLED.equals(order.getStatus())) {
+            log.info("Order {} is already CANCELLED, skipping.", orderId);
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isTerminalState(Order order, UUID orderId, String source) {
+        if (OrderStatus.CANCELLED.equals(order.getStatus())) {
+            log.warn("Order {} is CANCELLED! Success event from {} ignored.", orderId, source);
+            return true;
+        }
+        if (OrderStatus.CONFIRMED.equals(order.getStatus())) {
+            log.info("Order {} is already CONFIRMED.", orderId);
+            return true;
+        }
+        return false;
+    }
+
+    private void updateOrderStatus(Order order, SagaSuccessEvent event) {
+        var source = event.getSource();
+
+        switch (source) {
+            case "PAYMENT":
+                handlePaymentSuccess(order, event);
+                break;
+            case "PRODUCT":
+                handleProductSuccess(order);
+                break;
+            default:
+                log.warn("Unknown SAGA Source: {}", source);
+        }
+    }
+
+    private void handlePaymentSuccess(Order order, SagaSuccessEvent event) {
+        if (event.getPaymentId() != null) {
+            order.setPaymentId(event.getPaymentId());
+        }
+
+        if (OrderStatus.PENDING.equals(order.getStatus())) {
+            order.setStatus(OrderStatus.PAYMENT_PROCESSED);
+        } else if (OrderStatus.PRODUCT_PROCESSED.equals(order.getStatus())) {
+            order.setStatus(OrderStatus.CONFIRMED);
+        }
+    }
+
+    private void handleProductSuccess(Order order) {
+        if (OrderStatus.PENDING.equals(order.getStatus())) {
+            order.setStatus(OrderStatus.PRODUCT_PROCESSED);
+        } else if (OrderStatus.PAYMENT_PROCESSED.equals(order.getStatus())) {
+            order.setStatus(OrderStatus.CONFIRMED);
+        }
+    }
+
+    private void publishCancelledEvent(Order order) {
         var eventPayload = OrderCancelledEvent.builder()
                 .orderId(order.getId())
                 .reason(order.getFailReason())
                 .build();
 
-
-        @SuppressWarnings("unchecked")
-        Map<String, Object> mapPayload = objectMapper.convertValue(eventPayload, Map.class);
-
-        var event = OutboxEvent.builder()
-                .id(UUID.randomUUID())
-                .aggregateType("ORDER")
-                .aggregateId(order.getId().toString())
-                .type("ORDER_CANCELLED")
-                .payload(mapPayload)
-                .processed(true)
-                .build();
-
-        outboxEventRepository.save(event);
-
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
-            @Override
-            public void afterCommit() {
-                try {
-                    rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EVENTS_EXCHANGE, "", eventPayload);
-                    log.info("Published ORDER_CANCELLED event for Order: {}", order.getId());
-                } catch (Exception e) {
-                    log.error("Failed to publish ORDER_CANCELLED event for Order: {}", order.getId(), e);
-                }
-            }
-        });
+        saveOutboxEvent(order.getId(), EVENT_CANCELLED, eventPayload);
+        registerEventPublisher(eventPayload, order.getId(), EVENT_CANCELLED);
     }
 
-
-
-    @Transactional
-    public void handleSagaSuccess(SagaSuccessEvent event) {
-        var orderId = event.getOrderId();
-        var source = event.getSource();
-        
-        log.info("Handling SAGA Success for Order: {}, Source: {}", orderId, source);
-
-        var orderOptional = orderRepository.findById(orderId);
-        if (orderOptional.isEmpty()) {
-            log.warn("Order not found for SAGA Success: {}", orderId);
-            return;
-        }
-
-        var order = orderOptional.get();
-
-        if (OrderStatus.CANCELLED.equals(order.getStatus())) {
-            log.warn("Order {} is CANCELLED! success event from {} ignored.", orderId, source);
-            return;
-        }
-
-        if (OrderStatus.CONFIRMED.equals(order.getStatus())) {
-            log.info("Order {} is already CONFIRMED.", orderId);
-            return;
-        }
-
-        switch (source) {
-            case "PAYMENT":
-                if (event.getPaymentId() != null) {
-                    order.setPaymentId(event.getPaymentId());
-                }
-                if (OrderStatus.PENDING.equals(order.getStatus())) {
-                    order.setStatus(OrderStatus.PAYMENT_PROCESSED);
-                } else if (OrderStatus.PRODUCT_PROCESSED.equals(order.getStatus())) {
-                    order.setStatus(OrderStatus.CONFIRMED);
-                }
-                break;
-
-            case "PRODUCT":
-                if (OrderStatus.PENDING.equals(order.getStatus())) {
-                    order.setStatus(OrderStatus.PRODUCT_PROCESSED);
-                } else if (OrderStatus.PAYMENT_PROCESSED.equals(order.getStatus())) {
-                    order.setStatus(OrderStatus.CONFIRMED);
-                }
-                break;
-
-            default:
-                log.warn("Unknown SAGA Source: {}", source);
-                return;
-        }
-
-        orderRepository.save(order);
-        if (OrderStatus.CONFIRMED.equals(order.getStatus())) {
-            log.info("Order {} status updated to CONFIRMED. Publishing OrderConfirmedEvent.", order.getId());
-            saveAndPublishConfirmedEvent(order);
-        }
-    }
-
-    @SneakyThrows
-    private void saveAndPublishConfirmedEvent(Order order) {
-
+    private void publishConfirmedEvent(Order order) {
         var eventPayload = OrderConfirmedEvent.builder()
                 .orderId(order.getId())
                 .userId(order.getUserId())
                 .build();
 
+        saveOutboxEvent(order.getId(), EVENT_CONFIRMED, eventPayload);
+        registerEventPublisher(eventPayload, order.getId(), EVENT_CONFIRMED);
+    }
 
-        @SuppressWarnings("unchecked")
-        var mapPayload = (Map<String, Object>) objectMapper.convertValue(eventPayload, Map.class);
+    @SneakyThrows
+    private void saveOutboxEvent(UUID orderId, String eventType, Object eventPayload) {
+        var mapPayload = objectMapper.convertValue(eventPayload, new TypeReference<Map<String, Object>>() {});
 
         var event = OutboxEvent.builder()
                 .id(UUID.randomUUID())
-                .aggregateType("ORDER")
-                .aggregateId(order.getId().toString())
-                .type("ORDER_CONFIRMED")
+                .aggregateType(AGGREGATE_TYPE)
+                .aggregateId(orderId.toString())
+                .type(eventType)
                 .payload(mapPayload)
                 .processed(true)
                 .build();
 
         outboxEventRepository.save(event);
+    }
 
-
-        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(new org.springframework.transaction.support.TransactionSynchronizationAdapter() {
+    private void registerEventPublisher(Object eventPayload, UUID orderId, String eventType) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
                 try {
                     rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EVENTS_EXCHANGE, "", eventPayload);
-                    log.info("Published ORDER_CONFIRMED event for Order: {}", order.getId());
+                    log.info("Published {} event for Order: {}", eventType, orderId);
                 } catch (Exception e) {
-                    log.error("Failed to publish ORDER_CONFIRMED event for Order: {}", order.getId(), e);
+                    log.error("Failed to publish {} event for Order: {}", eventType, orderId, e);
                 }
             }
         });
     }
 }
+

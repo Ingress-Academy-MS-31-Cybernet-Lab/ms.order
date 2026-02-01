@@ -19,135 +19,183 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.List;
 
 @Component
 @RequiredArgsConstructor
 public class OrderCalculationServiceHandler implements OrderCalculationService {
 
     private static final BigDecimal BASE_SHIPPING_FEE = new BigDecimal("5.00");
+    private static final BigDecimal PERCENTAGE_DIVISOR = new BigDecimal("100");
+    private static final int RATIO_SCALE = 4;
+    private static final int AMOUNT_SCALE = 2;
 
     public void calculateOrder(Order order, OrderContext context) {
+        var grossAmount = calculateGrossAmount(context);
+        var result = processOrderItems(order, context, grossAmount);
+        var shippingFee = calculateShippingFee(context);
+
+        applyToOrder(order, result, grossAmount, shippingFee);
+    }
+
+    private ItemProcessingResult processOrderItems(Order order, OrderContext context, BigDecimal grossAmount) {
         var orderItems = new ArrayList<OrderItem>();
         var appliedDiscounts = new ArrayList<OrderDiscount>();
         var totalDiscountAmount = BigDecimal.ZERO;
 
-        var grossAmount = calculateGrossAmount(context);
-
-        for (OrderItemRequest req : context.getRequests()) {
+        for (var req : context.getRequests()) {
             var product = context.getProducts().get(req.getProductId());
-            var lineTotal = product.getPrice().multiply(BigDecimal.valueOf(req.getQuantity()));
-            var currentItemPrice = lineTotal;
-            var itemTotalDiscount = BigDecimal.ZERO;
+            var lineTotal = calculateLineTotal(product, req.getQuantity());
 
-            var currentItemDiscounts = new ArrayList<OrderDiscount>();
+            var itemResult = processItemDiscounts(order, context, req, product, lineTotal, grossAmount);
 
+            orderItems.add(itemResult.orderItem());
+            appliedDiscounts.addAll(itemResult.discounts());
+            totalDiscountAmount = totalDiscountAmount.add(itemResult.totalDiscount());
+        }
 
-            var itemPromo = context.getItemPromos().get(req.getPromoCode());
-            if (itemPromo != null) {
-                validatePromoApplicability(itemPromo, lineTotal, DiscountScope.PRODUCT);
+        return new ItemProcessingResult(orderItems, appliedDiscounts, totalDiscountAmount);
+    }
 
-                if (!product.getId().equals(itemPromo.getTargetProductId())) {
-                    throw new BusinessException(ErrorMessage.PROMO_NOT_APPLICABLE_TO_PRODUCT, 
-                            req.getPromoCode(), product.getId());
-                }
+    private SingleItemResult processItemDiscounts(Order order, OrderContext context, OrderItemRequest req,
+                                                   ProductDto product, BigDecimal lineTotal, BigDecimal grossAmount) {
+        var currentItemPrice = lineTotal;
+        var itemTotalDiscount = BigDecimal.ZERO;
+        var discounts = new ArrayList<OrderDiscount>();
 
-                var discountValue = calculateDiscountValue(itemPromo, currentItemPrice);
-                discountValue = discountValue.min(currentItemPrice);
+        var itemPromoResult = applyItemPromo(order, context, req, product, currentItemPrice);
+        if (itemPromoResult != null) {
+            currentItemPrice = currentItemPrice.subtract(itemPromoResult.discountValue());
+            itemTotalDiscount = itemTotalDiscount.add(itemPromoResult.discountValue());
+            discounts.add(itemPromoResult.discount());
+        }
 
-                currentItemPrice = currentItemPrice.subtract(discountValue);
-                itemTotalDiscount = itemTotalDiscount.add(discountValue);
-
-                currentItemDiscounts.add(createDiscountEntity(order, itemPromo, discountValue, DiscountSource.SELLER));
-            }
-
-
-            var globalPromo = context.getGlobalPromo();
-            if (globalPromo != null && itemTotalDiscount.compareTo(BigDecimal.ZERO) == 0) {
-                validatePromoApplicability(globalPromo, grossAmount, DiscountScope.ORDER);
-
-                var globalTotalValue = calculateDiscountValue(globalPromo, grossAmount);
-                var ratio = lineTotal.divide(grossAmount, 4, RoundingMode.HALF_UP);
-                var share = globalTotalValue.multiply(ratio).setScale(2, RoundingMode.HALF_UP);
-                share = share.min(currentItemPrice);
-
-                currentItemPrice = currentItemPrice.subtract(share);
-                itemTotalDiscount = itemTotalDiscount.add(share);
-
-                currentItemDiscounts.add(createDiscountEntity(order, globalPromo, share, DiscountSource.PLATFORM));
-            }
-
-            totalDiscountAmount = totalDiscountAmount.add(itemTotalDiscount);
-
-            var sellerFundedDiscount = currentItemDiscounts.stream()
-                    .filter(d -> DiscountSource.SELLER.name().equals(d.getDiscountSource()))
-                    .map(OrderDiscount::getAmount)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            var orderItem = buildOrderItem(order, req, product, lineTotal, itemTotalDiscount, sellerFundedDiscount);
-            orderItems.add(orderItem);
-
-
-            for (var discount : currentItemDiscounts) {
-                discount.setOrderItem(orderItem);
-                appliedDiscounts.add(discount);
+        if (itemTotalDiscount.compareTo(BigDecimal.ZERO) == 0) {
+            var globalPromoResult = applyGlobalPromo(order, context, lineTotal, grossAmount, currentItemPrice);
+            if (globalPromoResult != null) {
+                itemTotalDiscount = itemTotalDiscount.add(globalPromoResult.discountValue());
+                discounts.add(globalPromoResult.discount());
             }
         }
 
-        var shippingFee = calculateShippingFee(context);
+        var sellerFundedDiscount = calculateSellerFundedDiscount(discounts);
+        var orderItem = buildOrderItem(order, req, product, lineTotal, itemTotalDiscount, sellerFundedDiscount);
 
-        order.setItems(orderItems);
-        order.setDiscounts(appliedDiscounts);
+        discounts.forEach(d -> d.setOrderItem(orderItem));
+
+        return new SingleItemResult(orderItem, discounts, itemTotalDiscount);
+    }
+
+    private DiscountResult applyItemPromo(Order order, OrderContext context, OrderItemRequest req,
+                                          ProductDto product, BigDecimal currentPrice) {
+        var itemPromo = context.getItemPromos().get(req.getPromoCode());
+        if (itemPromo == null) {
+            return null;
+        }
+
+        validatePromoApplicability(itemPromo, currentPrice, DiscountScope.PRODUCT);
+        validateProductPromoMatch(itemPromo, product, req.getPromoCode());
+
+        var discountValue = calculateDiscountValue(itemPromo, currentPrice);
+        discountValue = discountValue.min(currentPrice);
+
+        var discount = createDiscountEntity(order, itemPromo, discountValue, DiscountSource.SELLER);
+        return new DiscountResult(discountValue, discount);
+    }
+
+    private DiscountResult applyGlobalPromo(Order order, OrderContext context, BigDecimal lineTotal,
+                                            BigDecimal grossAmount, BigDecimal currentPrice) {
+        var globalPromo = context.getGlobalPromo();
+        if (globalPromo == null) {
+            return null;
+        }
+
+        validatePromoApplicability(globalPromo, grossAmount, DiscountScope.ORDER);
+
+        var globalTotalValue = calculateDiscountValue(globalPromo, grossAmount);
+        var ratio = lineTotal.divide(grossAmount, RATIO_SCALE, RoundingMode.HALF_UP);
+        var share = globalTotalValue.multiply(ratio).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        share = share.min(currentPrice);
+
+        var discount = createDiscountEntity(order, globalPromo, share, DiscountSource.PLATFORM);
+        return new DiscountResult(share, discount);
+    }
+
+    private void validateProductPromoMatch(PromoDto promo, ProductDto product, String promoCode) {
+        if (!product.getId().equals(promo.getTargetProductId())) {
+            throw new BusinessException(ErrorMessage.PROMO_NOT_APPLICABLE_TO_PRODUCT, promoCode, product.getId());
+        }
+    }
+
+    private BigDecimal calculateSellerFundedDiscount(List<OrderDiscount> discounts) {
+        return discounts.stream()
+                .filter(d -> DiscountSource.SELLER.name().equals(d.getDiscountSource()))
+                .map(OrderDiscount::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private void applyToOrder(Order order, ItemProcessingResult result, BigDecimal grossAmount, BigDecimal shippingFee) {
+        order.setItems(result.orderItems());
+        order.setDiscounts(result.appliedDiscounts());
         order.setGrossAmount(grossAmount);
-        order.setTotalDiscount(totalDiscountAmount);
+        order.setTotalDiscount(result.totalDiscountAmount());
         order.setShippingAmount(shippingFee);
-        order.setNetAmount(grossAmount.subtract(totalDiscountAmount).add(shippingFee));
+        order.setNetAmount(grossAmount.subtract(result.totalDiscountAmount()).add(shippingFee));
+    }
+
+    private BigDecimal calculateLineTotal(ProductDto product, int quantity) {
+        return product.getPrice().multiply(BigDecimal.valueOf(quantity));
     }
 
     private BigDecimal calculateGrossAmount(OrderContext context) {
         return context.getRequests().stream()
                 .map(req -> {
-                    ProductDto product = context.getProducts().get(req.getProductId());
-                    return product.getPrice().multiply(BigDecimal.valueOf(req.getQuantity()));
+                    var product = context.getProducts().get(req.getProductId());
+                    return calculateLineTotal(product, req.getQuantity());
                 })
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private BigDecimal calculateShippingFee(OrderContext context) {
-        var heavyCost = context.getRequests().stream()
-                .map(req -> {
-                    var product = context.getProducts().get(req.getProductId());
-                    if (product.getShippingType() == ShippingType.HEAVY_ITEM) {
-                        var cost = product.getExtraShippingCost() != null ?
-                                product.getExtraShippingCost() : BigDecimal.ZERO;
-                        return cost.multiply(BigDecimal.valueOf(req.getQuantity()));
-                    }
-                    return BigDecimal.ZERO;
-                })
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        var heavyCost = calculateHeavyItemShipping(context);
+        var standardCost = calculateStandardShipping(context);
+        return heavyCost.add(standardCost);
+    }
 
-        long uniqueSuppliers = context.getRequests().stream()
+    private BigDecimal calculateHeavyItemShipping(OrderContext context) {
+        return context.getRequests().stream()
+                .map(req -> calculateItemHeavyShipping(context.getProducts().get(req.getProductId()), req.getQuantity()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal calculateItemHeavyShipping(ProductDto product, int quantity) {
+        if (product.getShippingType() != ShippingType.HEAVY_ITEM) {
+            return BigDecimal.ZERO;
+        }
+        var cost = product.getExtraShippingCost() != null ? product.getExtraShippingCost() : BigDecimal.ZERO;
+        return cost.multiply(BigDecimal.valueOf(quantity));
+    }
+
+    private BigDecimal calculateStandardShipping(OrderContext context) {
+        var uniqueSuppliers = context.getRequests().stream()
                 .map(req -> context.getProducts().get(req.getProductId()))
                 .filter(p -> p.getShippingType() == ShippingType.STANDARD)
                 .map(ProductDto::getSupplierId)
                 .distinct()
                 .count();
 
-        var standardCost = BigDecimal.valueOf(uniqueSuppliers).multiply(BASE_SHIPPING_FEE);
-
-        return heavyCost.add(standardCost);
+        return BigDecimal.valueOf(uniqueSuppliers).multiply(BASE_SHIPPING_FEE);
     }
 
     private BigDecimal calculateDiscountValue(PromoDto promo, BigDecimal baseAmount) {
         if (promo.getType() == DiscountType.PERCENTAGE) {
-            return baseAmount.multiply(promo.getValue()).divide(new BigDecimal("100"), 2,
-                    RoundingMode.HALF_UP);
-        } else {
-            return promo.getValue().min(baseAmount);
+            return baseAmount.multiply(promo.getValue())
+                    .divide(PERCENTAGE_DIVISOR, AMOUNT_SCALE, RoundingMode.HALF_UP);
         }
+        return promo.getValue().min(baseAmount);
     }
 
     private void validatePromoApplicability(PromoDto promo, BigDecimal amount, DiscountScope expectedScope) {
-
         if (promo.getScope() != expectedScope) {
             throw new BusinessException(ErrorMessage.PROMO_SCOPE_MISMATCH, expectedScope);
         }
@@ -160,6 +208,7 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
                                      BigDecimal discountShare, BigDecimal sellerFundedDiscount) {
         var commissionAmount = lineTotal.multiply(product.getCommissionRate());
         var payoutAmount = lineTotal.subtract(commissionAmount).subtract(sellerFundedDiscount);
+        var shippingFee = calculateItemHeavyShipping(product, req.getQuantity());
 
         return OrderItem.builder()
                 .order(order)
@@ -173,9 +222,7 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
                 .commissionAmount(commissionAmount)
                 .payoutAmount(payoutAmount)
                 .shippingType(product.getShippingType().name())
-                .shippingFee(product.getShippingType() == ShippingType.HEAVY_ITEM && product.getExtraShippingCost() != null 
-                        ? product.getExtraShippingCost().multiply(BigDecimal.valueOf(req.getQuantity())) 
-                        : BigDecimal.ZERO)
+                .shippingFee(shippingFee)
                 .build();
     }
 
@@ -189,4 +236,11 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
                 .amount(amount)
                 .build();
     }
+
+    private record ItemProcessingResult(List<OrderItem> orderItems, List<OrderDiscount> appliedDiscounts,
+                                        BigDecimal totalDiscountAmount) {}
+
+    private record SingleItemResult(OrderItem orderItem, List<OrderDiscount> discounts, BigDecimal totalDiscount) {}
+
+    private record DiscountResult(BigDecimal discountValue, OrderDiscount discount) {}
 }

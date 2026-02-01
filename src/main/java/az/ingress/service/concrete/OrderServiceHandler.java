@@ -11,7 +11,6 @@ import az.ingress.enums.OrderStatus;
 import az.ingress.exception.BusinessException;
 import az.ingress.exception.ErrorMessage;
 import az.ingress.mapstruct.OrderMapper;
-import az.ingress.config.RabbitMQConfig;
 import az.ingress.model.client.ProductDto;
 import az.ingress.model.client.PromoDto;
 import az.ingress.model.event.OrderCreatedEvent;
@@ -19,15 +18,14 @@ import az.ingress.model.request.CreateOrderRequest;
 import az.ingress.model.request.OrderItemRequest;
 import az.ingress.model.response.CreateOrderResponse;
 import az.ingress.service.abstraction.OrderService;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronizationAdapter;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -47,8 +45,7 @@ public class OrderServiceHandler implements OrderService {
     private final PromoClient promoClient;
     private final ObjectMapper objectMapper;
     private final OrderCalculationServiceHandler calculationService;
-
-    private final RabbitTemplate rabbitTemplate;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     @ActionLog
@@ -62,7 +59,7 @@ public class OrderServiceHandler implements OrderService {
         calculationService.calculateOrder(order, context);
 
         var savedOrder = orderRepository.save(order);
-        saveAndPublishOutboxEvent(savedOrder);
+        saveOutboxEvent(savedOrder);
 
         log.info("Order created successfully: {}", savedOrder.getId());
         return orderMapper.toResponse(savedOrder);
@@ -77,35 +74,9 @@ public class OrderServiceHandler implements OrderService {
     }
 
     private OrderContext buildOrderContext(CreateOrderRequest request) {
-
-        Map<String, ProductDto> products = request.getItems().stream()
-                .map(OrderItemRequest::getProductId)
-                .distinct()
-                .map(productClient::getProductById)
-                .collect(Collectors.toMap(ProductDto::getId, Function.identity()));
-
-
-        PromoDto globalPromo = null;
-        if (request.getPromoCode() != null && !request.getPromoCode().isBlank()) {
-            globalPromo = promoClient.validateAndGetPromo(request.getPromoCode());
-            if (globalPromo == null) {
-                throw new BusinessException(ErrorMessage.PROMO_NOT_FOUND, request.getPromoCode());
-            }
-        }
-
-        Map<String, PromoDto> itemPromos = new HashMap<>();
-        request.getItems().stream()
-                .map(OrderItemRequest::getPromoCode)
-                .filter(code -> code != null && !code.isBlank())
-                .distinct()
-                .distinct()
-                .forEach(code -> {
-                    PromoDto promo = promoClient.validateAndGetPromo(code);
-                    if (promo == null) {
-                        throw new BusinessException(ErrorMessage.PROMO_NOT_FOUND, code);
-                    }
-                    itemPromos.put(code, promo);
-                });
+        var products = fetchProducts(request);
+        var globalPromo = resolvePromo(request.getPromoCode());
+        var itemPromos = collectItemPromos(request);
 
         return OrderContext.builder()
                 .requests(request.getItems())
@@ -115,9 +86,37 @@ public class OrderServiceHandler implements OrderService {
                 .build();
     }
 
-    @SneakyThrows
-    private void saveAndPublishOutboxEvent(Order order) {
+    private Map<String, ProductDto> fetchProducts(CreateOrderRequest request) {
+        return request.getItems().stream()
+                .map(OrderItemRequest::getProductId)
+                .distinct()
+                .map(productClient::getProductById)
+                .collect(Collectors.toMap(ProductDto::getId, Function.identity()));
+    }
 
+    private PromoDto resolvePromo(String promoCode) {
+        if (promoCode == null || promoCode.isBlank()) {
+            return null;
+        }
+        var promo = promoClient.validateAndGetPromo(promoCode);
+        if (promo == null) {
+            throw new BusinessException(ErrorMessage.PROMO_NOT_FOUND, promoCode);
+        }
+        return promo;
+    }
+
+    private Map<String, PromoDto> collectItemPromos(CreateOrderRequest request) {
+        var itemPromos = new HashMap<String, PromoDto>();
+        request.getItems().stream()
+                .map(OrderItemRequest::getPromoCode)
+                .filter(code -> code != null && !code.isBlank())
+                .distinct()
+                .forEach(code -> itemPromos.put(code, resolvePromo(code)));
+        return itemPromos;
+    }
+
+    @SneakyThrows
+    private void saveOutboxEvent(Order order) {
         var eventPayload = OrderCreatedEvent.builder()
                 .orderId(order.getId())
                 .userId(order.getUserId())
@@ -125,7 +124,7 @@ public class OrderServiceHandler implements OrderService {
                 .status(order.getStatus())
                 .build();
 
-        var mapPayload = (Map<String, Object>) objectMapper.convertValue(eventPayload, Map.class);
+        var mapPayload = objectMapper.convertValue(eventPayload, new TypeReference<Map<String, Object>>() {});
 
         var event = OutboxEvent.builder()
                 .id(UUID.randomUUID())
@@ -137,17 +136,6 @@ public class OrderServiceHandler implements OrderService {
                 .build();
 
         outboxRepository.save(event);
-        
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
-            @Override
-            public void afterCommit() {
-                try {
-                    rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EVENTS_EXCHANGE, "", eventPayload);
-                    log.info("Published ORDER_CREATED event for Order: {}", order.getId());
-                } catch (Exception e) {
-                    log.error("Failed to publish ORDER_CREATED event for Order: {}", order.getId(), e);
-                }
-            }
-        });
+        eventPublisher.publishEvent(eventPayload);
     }
 }
