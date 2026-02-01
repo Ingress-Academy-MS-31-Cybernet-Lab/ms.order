@@ -27,4 +27,11 @@ public class ErrorHandler {
         log.error("HttpRequestMethodNotSupportedException: ", ex);
         return new ErrorResponse(ex.getMessage());
     }
+
+    @ExceptionHandler(NotFoundException.class)
+    @ResponseStatus(org.springframework.http.HttpStatus.NOT_FOUND)
+    public ErrorResponse handle(NotFoundException ex) {
+        log.error("NotFoundException: ", ex);
+        return new ErrorResponse(ex.getMessage());
+    }
 }

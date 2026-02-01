@@ -87,7 +87,7 @@ public class MockProductAdapter implements ProductClient {
         log.info("MOCK REQUEST: Fetching product with ID: {}", productId);
 
         if (!MOCK_DATABASE.containsKey(productId)) {
-            throw new RuntimeException("Product not found! ID does not exist in Mock DB: " + productId);
+            throw new az.ingress.exception.NotFoundException("Product not found with ID: " + productId);
         }
 
         return MOCK_DATABASE.get(productId);

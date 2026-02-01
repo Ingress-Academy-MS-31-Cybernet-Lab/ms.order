@@ -11,13 +11,13 @@ import az.ingress.model.client.ProductDto;
 import az.ingress.model.client.PromoDto;
 import az.ingress.model.request.OrderItemRequest;
 import az.ingress.service.abstraction.OrderCalculationService;
-import az.ingress.service.abstraction.OrderService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.List;
 
 @Component
 @RequiredArgsConstructor
@@ -38,6 +38,8 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
             BigDecimal currentItemPrice = lineTotal;
             BigDecimal itemTotalDiscount = BigDecimal.ZERO;
 
+            List<OrderDiscount> currentItemDiscounts = new ArrayList<>();
+
             // 1. Item Specific Promo
             PromoDto itemPromo = context.getItemPromos().get(req.getPromoCode());
             if (itemPromo != null) {
@@ -53,7 +55,7 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
                 currentItemPrice = currentItemPrice.subtract(discountValue);
                 itemTotalDiscount = itemTotalDiscount.add(discountValue);
 
-                appliedDiscounts.add(createDiscountEntity(order, itemPromo, discountValue, DiscountSource.SELLER));
+                currentItemDiscounts.add(createDiscountEntity(order, itemPromo, discountValue, DiscountSource.SELLER));
             }
 
             // 2. Global Promo
@@ -69,11 +71,24 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
                 currentItemPrice = currentItemPrice.subtract(share);
                 itemTotalDiscount = itemTotalDiscount.add(share);
 
-                appliedDiscounts.add(createDiscountEntity(order, globalPromo, share, DiscountSource.PLATFORM));
+                currentItemDiscounts.add(createDiscountEntity(order, globalPromo, share, DiscountSource.PLATFORM));
             }
 
             totalDiscountAmount = totalDiscountAmount.add(itemTotalDiscount);
-            orderItems.add(buildOrderItem(order, req, product, lineTotal, itemTotalDiscount));
+
+            BigDecimal sellerFundedDiscount = currentItemDiscounts.stream()
+                    .filter(d -> DiscountSource.SELLER.name().equals(d.getDiscountSource()))
+                    .map(OrderDiscount::getAmount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            OrderItem orderItem = buildOrderItem(order, req, product, lineTotal, itemTotalDiscount, sellerFundedDiscount);
+            orderItems.add(orderItem);
+
+            // Link OrderItem to Discounts
+            for (OrderDiscount discount : currentItemDiscounts) {
+                discount.setOrderItem(orderItem);
+                appliedDiscounts.add(discount);
+            }
         }
 
         BigDecimal shippingFee = calculateShippingFee(context);
@@ -139,9 +154,9 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
     }
 
     private OrderItem buildOrderItem(Order order, OrderItemRequest req, ProductDto product, BigDecimal lineTotal,
-                                     BigDecimal discountShare) {
+                                     BigDecimal discountShare, BigDecimal sellerFundedDiscount) {
         BigDecimal commissionAmount = lineTotal.multiply(product.getCommissionRate());
-        BigDecimal payoutAmount = lineTotal.subtract(commissionAmount);
+        BigDecimal payoutAmount = lineTotal.subtract(commissionAmount).subtract(sellerFundedDiscount);
 
         return OrderItem.builder()
                 .order(order)
@@ -155,6 +170,9 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
                 .commissionAmount(commissionAmount)
                 .payoutAmount(payoutAmount)
                 .shippingType(product.getShippingType().name())
+                .shippingFee(product.getShippingType() == ShippingType.HEAVY_ITEM && product.getExtraShippingCost() != null 
+                        ? product.getExtraShippingCost().multiply(BigDecimal.valueOf(req.getQuantity())) 
+                        : BigDecimal.ZERO) // Basic mapping for now
                 .build();
     }
 
@@ -162,8 +180,9 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
         return OrderDiscount.builder()
                 .order(order)
                 .promoCode(promo.getCode())
-                .discountType(promo.getScope().name())
-                .fundedBy(source.name())
+                .discountScope(promo.getScope().name())
+                .discountType(promo.getType().name())
+                .discountSource(source.name())
                 .amount(amount)
                 .build();
     }

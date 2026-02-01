@@ -42,6 +42,7 @@ import java.util.UUID;
 @Table(name = "orders")
 @EqualsAndHashCode(of = "id")
 @ToString(exclude = {"items", "discounts"})
+@org.hibernate.annotations.TypeDef(name = "jsonb", typeClass = JsonBinaryType.class)
 public class Order {
 
     @Id

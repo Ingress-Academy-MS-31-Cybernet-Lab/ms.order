@@ -46,13 +46,16 @@ public class OrderDiscount {
     private String promoCode;
 
     @Column
-    private String discountType; // PRODUCT, SHIPPING
+    private String discountScope; // PRODUCT, ORDER
+
+    @Column
+    private String discountType; // PERCENTAGE, FIXED
 
     @Column(nullable = false)
     private BigDecimal amount;
 
     @Column(nullable = false)
-    private String fundedBy; // PLATFORM, SUPPLIER
+    private String discountSource; // PLATFORM, SUPPLIER
 
     @Column(columnDefinition = "TEXT")
     private String description;

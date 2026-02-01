@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +41,8 @@ public class OrderServiceHandler implements OrderService {
     private final ObjectMapper objectMapper;
     private final OrderCalculationServiceHandler calculationService;
 
+    private final RabbitTemplate rabbitTemplate;
+
     @Override
     @Transactional
     public CreateOrderResponse createOrder(CreateOrderRequest request) {
@@ -51,7 +54,7 @@ public class OrderServiceHandler implements OrderService {
         calculationService.calculateOrder(order, context);
 
         Order savedOrder = orderRepository.save(order);
-        saveOutboxEvent(savedOrder);
+        saveAndPublishOutboxEvent(savedOrder);
 
         log.info("Order created successfully: {}", savedOrder.getId());
         return orderMapper.toResponse(savedOrder);
@@ -95,10 +98,17 @@ public class OrderServiceHandler implements OrderService {
     }
 
     @SneakyThrows
-    private void saveOutboxEvent(Order order) {
-        var payload = orderMapper.toResponse(order);
+    private void saveAndPublishOutboxEvent(Order order) {
+        // Build correct event payload
+        az.ingress.model.event.OrderCreatedEvent eventPayload = az.ingress.model.event.OrderCreatedEvent.builder()
+                .orderId(order.getId())
+                .userId(order.getUserId())
+                .orderNumber(order.getOrderNumber())
+                .status(order.getStatus())
+                .build();
+
         @SuppressWarnings("unchecked")
-        Map<String, Object> mapPayload = objectMapper.convertValue(payload, Map.class);
+        Map<String, Object> mapPayload = objectMapper.convertValue(eventPayload, Map.class);
 
         OutboxEvent event = OutboxEvent.builder()
                 .id(UUID.randomUUID())
@@ -106,8 +116,18 @@ public class OrderServiceHandler implements OrderService {
                 .aggregateId(order.getId().toString())
                 .type("ORDER_CREATED")
                 .payload(mapPayload)
+                .processed(true) // Mark as processed immediately
                 .build();
 
         outboxRepository.save(event);
+        
+        // Publish to RabbitMQ after transaction commit
+        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(new org.springframework.transaction.support.TransactionSynchronizationAdapter() {
+            @Override
+            public void afterCommit() {
+                rabbitTemplate.convertAndSend(az.ingress.config.RabbitMQConfig.ORDER_EVENTS_EXCHANGE, "", eventPayload);
+                log.info("Published ORDER_CREATED event for Order: {}", order.getId());
+            }
+        });
     }
 }
