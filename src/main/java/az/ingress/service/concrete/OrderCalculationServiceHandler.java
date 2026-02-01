@@ -7,6 +7,8 @@ import az.ingress.enums.DiscountScope;
 import az.ingress.enums.DiscountSource;
 import az.ingress.enums.DiscountType;
 import az.ingress.enums.ShippingType;
+import az.ingress.exception.BusinessException;
+import az.ingress.exception.ErrorMessage;
 import az.ingress.model.client.ProductDto;
 import az.ingress.model.client.PromoDto;
 import az.ingress.model.request.OrderItemRequest;
@@ -17,7 +19,6 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
-import java.util.List;
 
 @Component
 @RequiredArgsConstructor
@@ -30,26 +31,27 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
         var appliedDiscounts = new ArrayList<OrderDiscount>();
         var totalDiscountAmount = BigDecimal.ZERO;
 
-        BigDecimal grossAmount = calculateGrossAmount(context);
+        var grossAmount = calculateGrossAmount(context);
 
         for (OrderItemRequest req : context.getRequests()) {
-            ProductDto product = context.getProducts().get(req.getProductId());
-            BigDecimal lineTotal = product.getPrice().multiply(BigDecimal.valueOf(req.getQuantity()));
-            BigDecimal currentItemPrice = lineTotal;
-            BigDecimal itemTotalDiscount = BigDecimal.ZERO;
+            var product = context.getProducts().get(req.getProductId());
+            var lineTotal = product.getPrice().multiply(BigDecimal.valueOf(req.getQuantity()));
+            var currentItemPrice = lineTotal;
+            var itemTotalDiscount = BigDecimal.ZERO;
 
-            List<OrderDiscount> currentItemDiscounts = new ArrayList<>();
+            var currentItemDiscounts = new ArrayList<OrderDiscount>();
 
-            // 1. Item Specific Promo
-            PromoDto itemPromo = context.getItemPromos().get(req.getPromoCode());
+
+            var itemPromo = context.getItemPromos().get(req.getPromoCode());
             if (itemPromo != null) {
                 validatePromoApplicability(itemPromo, lineTotal, DiscountScope.PRODUCT);
+
                 if (!product.getId().equals(itemPromo.getTargetProductId())) {
-                    throw new RuntimeException("Promo code " + req.getPromoCode() + " is not applicable to product "
-                            + product.getId());
+                    throw new BusinessException(ErrorMessage.PROMO_NOT_APPLICABLE_TO_PRODUCT, 
+                            req.getPromoCode(), product.getId());
                 }
 
-                BigDecimal discountValue = calculateDiscountValue(itemPromo, currentItemPrice);
+                var discountValue = calculateDiscountValue(itemPromo, currentItemPrice);
                 discountValue = discountValue.min(currentItemPrice);
 
                 currentItemPrice = currentItemPrice.subtract(discountValue);
@@ -58,14 +60,14 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
                 currentItemDiscounts.add(createDiscountEntity(order, itemPromo, discountValue, DiscountSource.SELLER));
             }
 
-            // 2. Global Promo
-            PromoDto globalPromo = context.getGlobalPromo();
+
+            var globalPromo = context.getGlobalPromo();
             if (globalPromo != null && itemTotalDiscount.compareTo(BigDecimal.ZERO) == 0) {
                 validatePromoApplicability(globalPromo, grossAmount, DiscountScope.ORDER);
 
-                BigDecimal globalTotalValue = calculateDiscountValue(globalPromo, grossAmount);
-                BigDecimal ratio = lineTotal.divide(grossAmount, 4, RoundingMode.HALF_UP);
-                BigDecimal share = globalTotalValue.multiply(ratio).setScale(2, RoundingMode.HALF_UP);
+                var globalTotalValue = calculateDiscountValue(globalPromo, grossAmount);
+                var ratio = lineTotal.divide(grossAmount, 4, RoundingMode.HALF_UP);
+                var share = globalTotalValue.multiply(ratio).setScale(2, RoundingMode.HALF_UP);
                 share = share.min(currentItemPrice);
 
                 currentItemPrice = currentItemPrice.subtract(share);
@@ -76,22 +78,22 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
 
             totalDiscountAmount = totalDiscountAmount.add(itemTotalDiscount);
 
-            BigDecimal sellerFundedDiscount = currentItemDiscounts.stream()
+            var sellerFundedDiscount = currentItemDiscounts.stream()
                     .filter(d -> DiscountSource.SELLER.name().equals(d.getDiscountSource()))
                     .map(OrderDiscount::getAmount)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            OrderItem orderItem = buildOrderItem(order, req, product, lineTotal, itemTotalDiscount, sellerFundedDiscount);
+            var orderItem = buildOrderItem(order, req, product, lineTotal, itemTotalDiscount, sellerFundedDiscount);
             orderItems.add(orderItem);
 
-            // Link OrderItem to Discounts
-            for (OrderDiscount discount : currentItemDiscounts) {
+
+            for (var discount : currentItemDiscounts) {
                 discount.setOrderItem(orderItem);
                 appliedDiscounts.add(discount);
             }
         }
 
-        BigDecimal shippingFee = calculateShippingFee(context);
+        var shippingFee = calculateShippingFee(context);
 
         order.setItems(orderItems);
         order.setDiscounts(appliedDiscounts);
@@ -111,11 +113,11 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
     }
 
     private BigDecimal calculateShippingFee(OrderContext context) {
-        BigDecimal heavyCost = context.getRequests().stream()
+        var heavyCost = context.getRequests().stream()
                 .map(req -> {
-                    ProductDto product = context.getProducts().get(req.getProductId());
+                    var product = context.getProducts().get(req.getProductId());
                     if (product.getShippingType() == ShippingType.HEAVY_ITEM) {
-                        BigDecimal cost = product.getExtraShippingCost() != null ?
+                        var cost = product.getExtraShippingCost() != null ?
                                 product.getExtraShippingCost() : BigDecimal.ZERO;
                         return cost.multiply(BigDecimal.valueOf(req.getQuantity()));
                     }
@@ -130,7 +132,7 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
                 .distinct()
                 .count();
 
-        BigDecimal standardCost = BigDecimal.valueOf(uniqueSuppliers).multiply(BASE_SHIPPING_FEE);
+        var standardCost = BigDecimal.valueOf(uniqueSuppliers).multiply(BASE_SHIPPING_FEE);
 
         return heavyCost.add(standardCost);
     }
@@ -145,18 +147,19 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
     }
 
     private void validatePromoApplicability(PromoDto promo, BigDecimal amount, DiscountScope expectedScope) {
+
         if (promo.getScope() != expectedScope) {
-            throw new RuntimeException("Promo scope mismatch. Expected: " + expectedScope);
+            throw new BusinessException(ErrorMessage.PROMO_SCOPE_MISMATCH, expectedScope);
         }
         if (amount.compareTo(promo.getMinOrderAmount()) < 0) {
-            throw new RuntimeException("Minimum amount requirements not met for promo: " + promo.getCode());
+            throw new BusinessException(ErrorMessage.PROMO_MIN_AMOUNT_NOT_MET, promo.getCode());
         }
     }
 
     private OrderItem buildOrderItem(Order order, OrderItemRequest req, ProductDto product, BigDecimal lineTotal,
                                      BigDecimal discountShare, BigDecimal sellerFundedDiscount) {
-        BigDecimal commissionAmount = lineTotal.multiply(product.getCommissionRate());
-        BigDecimal payoutAmount = lineTotal.subtract(commissionAmount).subtract(sellerFundedDiscount);
+        var commissionAmount = lineTotal.multiply(product.getCommissionRate());
+        var payoutAmount = lineTotal.subtract(commissionAmount).subtract(sellerFundedDiscount);
 
         return OrderItem.builder()
                 .order(order)
@@ -172,7 +175,7 @@ public class OrderCalculationServiceHandler implements OrderCalculationService {
                 .shippingType(product.getShippingType().name())
                 .shippingFee(product.getShippingType() == ShippingType.HEAVY_ITEM && product.getExtraShippingCost() != null 
                         ? product.getExtraShippingCost().multiply(BigDecimal.valueOf(req.getQuantity())) 
-                        : BigDecimal.ZERO) // Basic mapping for now
+                        : BigDecimal.ZERO)
                 .build();
     }
 

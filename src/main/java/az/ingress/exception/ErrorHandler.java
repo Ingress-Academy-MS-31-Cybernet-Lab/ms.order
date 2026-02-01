@@ -34,4 +34,11 @@ public class ErrorHandler {
         log.error("NotFoundException: ", ex);
         return new ErrorResponse(ex.getMessage());
     }
+
+    @ExceptionHandler(BusinessException.class)
+    @ResponseStatus(org.springframework.http.HttpStatus.BAD_REQUEST)
+    public ErrorResponse handle(BusinessException ex) {
+        log.error("BusinessException: ", ex);
+        return new ErrorResponse(ex.getMessage());
+    }
 }

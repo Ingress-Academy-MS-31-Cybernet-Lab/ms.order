@@ -26,8 +26,8 @@ public class MockProductListener {
             return;
         }
 
-        // Simulating Product Failure for specific validation (e.g. quantity > 100 or specific product)
-        // For simple testing, let's say if userId is 998, we simulate 'Out of Stock'
+        // Simulating Product Failure (quantity > 100 || specific product)
+        // if userId is 998, we simulate 'Out of Stock'
         if (Long.valueOf(998).equals(event.getUserId())) {
             log.warn("Simulating OUT OF STOCK failure for Order: {}", event.getOrderId());
 

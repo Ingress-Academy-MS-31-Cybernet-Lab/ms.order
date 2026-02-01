@@ -4,7 +4,11 @@ import az.ingress.dao.entity.Order;
 import az.ingress.dao.entity.OutboxEvent;
 import az.ingress.dao.repository.OrderRepository;
 import az.ingress.dao.repository.OutboxEventRepository;
+import az.ingress.config.RabbitMQConfig;
 import az.ingress.enums.OrderStatus;
+import az.ingress.model.event.OrderCancelledEvent;
+import az.ingress.model.event.OrderConfirmedEvent;
+import az.ingress.model.event.SagaSuccessEvent;
 import az.ingress.service.abstraction.OrderSagaService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +17,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationAdapter;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Map;
 import java.util.UUID;
@@ -38,7 +44,7 @@ public class OrderSagaHandler implements OrderSagaService {
             return;
         }
 
-        Order order = orderOptional.get();
+        var order = orderOptional.get();
 
         if (OrderStatus.CANCELLED.equals(order.getStatus())) {
             log.info("Order {} is already CANCELLED, skipping compensation.", orderId);
@@ -55,52 +61,46 @@ public class OrderSagaHandler implements OrderSagaService {
 
     @SneakyThrows
     private void saveAndPublishOutboxEvent(Order order) {
-        // Create event object
-        az.ingress.model.event.OrderCancelledEvent eventPayload = az.ingress.model.event.OrderCancelledEvent.builder()
+
+        var eventPayload = OrderCancelledEvent.builder()
                 .orderId(order.getId())
                 .reason(order.getFailReason())
                 .build();
 
-        // Convert to map for Outbox (DB storage)
+
         @SuppressWarnings("unchecked")
         Map<String, Object> mapPayload = objectMapper.convertValue(eventPayload, Map.class);
 
-        OutboxEvent event = OutboxEvent.builder()
+        var event = OutboxEvent.builder()
                 .id(UUID.randomUUID())
                 .aggregateType("ORDER")
                 .aggregateId(order.getId().toString())
                 .type("ORDER_CANCELLED")
                 .payload(mapPayload)
-                .processed(true) // Mark as processed
+                .processed(true)
                 .build();
 
         outboxEventRepository.save(event);
 
-        // Publish to RabbitMQ (Using Order Events Exchange for status updates)
-        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(new org.springframework.transaction.support.TransactionSynchronizationAdapter() {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
             @Override
             public void afterCommit() {
-                rabbitTemplate.convertAndSend(az.ingress.config.RabbitMQConfig.ORDER_EVENTS_EXCHANGE, "", eventPayload);
-                log.info("Published ORDER_CANCELLED event for Order: {}", order.getId());
+                try {
+                    rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EVENTS_EXCHANGE, "", eventPayload);
+                    log.info("Published ORDER_CANCELLED event for Order: {}", order.getId());
+                } catch (Exception e) {
+                    log.error("Failed to publish ORDER_CANCELLED event for Order: {}", order.getId(), e);
+                }
             }
         });
     }
 
 
-    @Override
-    @Transactional
-    public void handleSagaSuccess(UUID orderId, String source) {
-        // Fallback for interface consistency if called directly
-        handleSagaSuccess(az.ingress.model.event.SagaSuccessEvent.builder()
-                .orderId(orderId)
-                .source(source)
-                .build());
-    }
 
     @Transactional
-    public void handleSagaSuccess(az.ingress.model.event.SagaSuccessEvent event) {
-        UUID orderId = event.getOrderId();
-        String source = event.getSource();
+    public void handleSagaSuccess(SagaSuccessEvent event) {
+        var orderId = event.getOrderId();
+        var source = event.getSource();
         
         log.info("Handling SAGA Success for Order: {}, Source: {}", orderId, source);
 
@@ -110,7 +110,7 @@ public class OrderSagaHandler implements OrderSagaService {
             return;
         }
 
-        Order order = orderOptional.get();
+        var order = orderOptional.get();
 
         if (OrderStatus.CANCELLED.equals(order.getStatus())) {
             log.warn("Order {} is CANCELLED! success event from {} ignored.", orderId, source);
@@ -122,7 +122,6 @@ public class OrderSagaHandler implements OrderSagaService {
             return;
         }
 
-        // State Machine Logic
         switch (source) {
             case "PAYMENT":
                 if (event.getPaymentId() != null) {
@@ -157,33 +156,37 @@ public class OrderSagaHandler implements OrderSagaService {
 
     @SneakyThrows
     private void saveAndPublishConfirmedEvent(Order order) {
-        // Create event object
-        az.ingress.model.event.OrderConfirmedEvent eventPayload = az.ingress.model.event.OrderConfirmedEvent.builder()
+
+        var eventPayload = OrderConfirmedEvent.builder()
                 .orderId(order.getId())
                 .userId(order.getUserId())
                 .build();
 
-        // Convert to map for Outbox (DB storage)
-        @SuppressWarnings("unchecked")
-        Map<String, Object> mapPayload = objectMapper.convertValue(eventPayload, Map.class);
 
-        OutboxEvent event = OutboxEvent.builder()
+        @SuppressWarnings("unchecked")
+        var mapPayload = (Map<String, Object>) objectMapper.convertValue(eventPayload, Map.class);
+
+        var event = OutboxEvent.builder()
                 .id(UUID.randomUUID())
                 .aggregateType("ORDER")
                 .aggregateId(order.getId().toString())
                 .type("ORDER_CONFIRMED")
                 .payload(mapPayload)
-                .processed(true) // Mark as processed
+                .processed(true)
                 .build();
 
         outboxEventRepository.save(event);
 
-        // Publish to RabbitMQ
+
         org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(new org.springframework.transaction.support.TransactionSynchronizationAdapter() {
             @Override
             public void afterCommit() {
-                rabbitTemplate.convertAndSend(az.ingress.config.RabbitMQConfig.ORDER_EVENTS_EXCHANGE, "", eventPayload);
-                log.info("Published ORDER_CONFIRMED event for Order: {}", order.getId());
+                try {
+                    rabbitTemplate.convertAndSend(RabbitMQConfig.ORDER_EVENTS_EXCHANGE, "", eventPayload);
+                    log.info("Published ORDER_CONFIRMED event for Order: {}", order.getId());
+                } catch (Exception e) {
+                    log.error("Failed to publish ORDER_CONFIRMED event for Order: {}", order.getId(), e);
+                }
             }
         });
     }

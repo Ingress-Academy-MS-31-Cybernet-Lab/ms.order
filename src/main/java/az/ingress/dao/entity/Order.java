@@ -101,14 +101,4 @@ public class Order {
     @Builder.Default
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderDiscount> discounts = new ArrayList<>();
-
-    public void addItem(OrderItem item) {
-        items.add(item);
-        item.setOrder(this);
-    }
-
-    public void addDiscount(OrderDiscount discount) {
-        discounts.add(discount);
-        discount.setOrder(this);
-    }
 }

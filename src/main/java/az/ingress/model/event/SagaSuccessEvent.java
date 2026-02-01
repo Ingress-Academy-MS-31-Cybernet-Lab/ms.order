@@ -14,5 +14,5 @@ import java.util.UUID;
 public class SagaSuccessEvent {
     private UUID orderId;
     private String source; // PAYMENT, PRODUCT
-    private String paymentId; // Optional, for PAYMENT source
+    private String paymentId;
 }
