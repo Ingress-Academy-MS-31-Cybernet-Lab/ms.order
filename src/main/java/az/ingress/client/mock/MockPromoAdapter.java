@@ -47,6 +47,6 @@ public class MockPromoAdapter implements PromoClient {
     @Override
     public PromoDto validateAndGetPromo(String code) {
         if (code == null) return null;
-        return PROMO_DB.get(code); // Tapılmasa null qaytarır, service handle etməlidir
+        return PROMO_DB.get(code);
     }
 }

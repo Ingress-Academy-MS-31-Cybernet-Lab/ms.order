@@ -6,9 +6,9 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.springframework.stereotype.Component;
 
+@Slf4j
 @Aspect
 @Component
-@Slf4j
 public class ActionLogAspect {
 
     @Around("@annotation(az.ingress.annotation.ActionLog)")
