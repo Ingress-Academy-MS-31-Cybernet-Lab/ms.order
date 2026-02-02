@@ -1,0 +1,16 @@
+{
+  "userId": 998,
+  "items": [
+    {
+      "productId": "P-1001",
+      "quantity": 1,
+      "price": 2400.00
+    }
+  ],
+  "shippingAddress": {
+    "country": "AZ",
+    "city": "Baku",
+    "street": "Nizami",
+    "zipCode": "AZ1000"
+  }
+}

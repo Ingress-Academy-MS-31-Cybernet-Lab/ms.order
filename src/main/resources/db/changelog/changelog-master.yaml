@@ -1,0 +1,5 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/changeset/v1_0/init_schema.yaml
+  - include:
+      file: db/changelog/changeset/v1_1/refactor_order_discount.yaml

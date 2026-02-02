@@ -1,0 +1,25 @@
+{
+  "userId": 102,
+  "promoCode": "YAY_KOMPANIYASI",
+  "items": [
+    {
+      "productId": "P-1001",
+      "quantity": 1,
+      "promoCode": "APPLE_DEAL_10"
+    },
+    {
+      "productId": "P-1002",
+      "quantity": 2
+    },
+    {
+      "productId": "P-3001",
+      "quantity": 1
+    }
+  ],
+  "shippingAddress": {
+    "country": "AZ",
+    "city": "Baku",
+    "street": "Nizami",
+    "zipCode": "AZ1000"
+  }
+}

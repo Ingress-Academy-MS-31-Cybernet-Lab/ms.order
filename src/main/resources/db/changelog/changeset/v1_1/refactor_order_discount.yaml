@@ -1,0 +1,21 @@
+databaseChangeLog:
+  - changeSet:
+      id: refactor_order_discounts
+      author: camil.camalov
+      changes:
+        - renameColumn:
+            tableName: order_discounts
+            oldColumnName: discount_type
+            newColumnName: discount_scope
+            columnDataType: VARCHAR(20)
+        - renameColumn:
+            tableName: order_discounts
+            oldColumnName: funded_by
+            newColumnName: discount_source
+            columnDataType: VARCHAR(20)
+        - addColumn:
+            tableName: order_discounts
+            columns:
+              - column:
+                  name: discount_type
+                  type: VARCHAR(20)
