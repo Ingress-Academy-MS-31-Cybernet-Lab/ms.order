@@ -20,6 +20,12 @@ public class RabbitMQConfig {
     public static final String SAGA_ROLLBACK_QUEUE = "q.order.saga.rollback";
     public static final String MOCK_PAYMENT_QUEUE = "q.mock.payment";
     public static final String SAGA_FAIL_ROUTING_KEY = "saga.event.fail";
+    public static final String SAGA_SUCCESS_QUEUE = "q.order.saga.success";
+    public static final String SAGA_SUCCESS_ROUTING_KEY = "saga.event.success";
+
+    // Audit/Trace Queue (For Debugging/History)
+    public static final String AUDIT_QUEUE = "q.order.audit";
+
 
     @Bean
     public FanoutExchange orderEventsExchange() {
@@ -63,9 +69,6 @@ public class RabbitMQConfig {
         return BindingBuilder.bind(sagaRollbackQueue()).to(sagaExchange()).with(SAGA_FAIL_ROUTING_KEY);
     }
 
-    public static final String SAGA_SUCCESS_QUEUE = "q.order.saga.success";
-    public static final String SAGA_SUCCESS_ROUTING_KEY = "saga.event.success";
-
     @Bean
     public Queue sagaSuccessQueue() {
         return QueueBuilder.durable(SAGA_SUCCESS_QUEUE).build();
@@ -75,9 +78,6 @@ public class RabbitMQConfig {
     public Binding sagaSuccessBinding() {
         return BindingBuilder.bind(sagaSuccessQueue()).to(sagaExchange()).with(SAGA_SUCCESS_ROUTING_KEY);
     }
-
-    // 4. Audit/Trace Queue (For Debugging/History)
-    public static final String AUDIT_QUEUE = "q.order.audit";
 
     @Bean
     public Queue auditQueue() {
