@@ -3,6 +3,7 @@ package az.ingress.messaging.mock;
 import az.ingress.config.RabbitMQConfig;
 import az.ingress.model.event.OrderCreatedEvent;
 import az.ingress.model.event.SagaFailureEvent;
+import az.ingress.model.event.SagaSuccessEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitHandler;
@@ -46,7 +47,7 @@ public class MockProductListener {
             log.info("Published PRODUCT_FAILURE event to {}", RabbitMQConfig.SAGA_EXCHANGE);
         } else {
             // Success Case
-            az.ingress.model.event.SagaSuccessEvent successEvent = az.ingress.model.event.SagaSuccessEvent.builder()
+            SagaSuccessEvent successEvent = SagaSuccessEvent.builder()
                     .orderId(event.getOrderId())
                     .source("PRODUCT")
                     .build();
